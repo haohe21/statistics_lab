@@ -17,14 +17,37 @@ from scipy import stats
 
 # Explicitly select a CJK-capable font. Without this, Matplotlib often falls
 # back to DejaVu Sans and renders Chinese titles/axis labels as squares.
-mpl.rcParams["font.family"] = "sans-serif"
-mpl.rcParams["font.sans-serif"] = [
-    "Microsoft YaHei",
-    "Noto Sans CJK SC",
-    "Noto Sans SC",
-    "SimHei",
-    "DejaVu Sans",
-]
+from pathlib import Path
+from matplotlib import font_manager
+
+# sampling_lab.py 位于“抽样分布_区间估计”子文件夹，
+# 因此需要向上返回一层，才能找到仓库根目录的 fonts 文件夹。
+font_path = (
+    Path(__file__).resolve().parent.parent
+    / "fonts"
+    / "NotoSansSC-Regular.ttf"
+)
+
+if font_path.exists():
+    # 将项目中的中文字体注册给 Matplotlib
+    font_manager.fontManager.addfont(str(font_path))
+
+    # 读取字体的内部名称
+    cjk_font = font_manager.FontProperties(
+        fname=str(font_path)
+    ).get_name()
+
+    mpl.rcParams["font.family"] = cjk_font
+    mpl.rcParams["font.sans-serif"] = [cjk_font]
+else:
+    # 找不到字体时的备用设置
+    mpl.rcParams["font.family"] = "sans-serif"
+    mpl.rcParams["font.sans-serif"] = [
+        "Noto Sans CJK SC",
+        "Noto Sans SC",
+        "DejaVu Sans",
+    ]
+
 mpl.rcParams["axes.unicode_minus"] = False
 
 
