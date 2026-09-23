@@ -17,37 +17,14 @@ from scipy import stats
 
 # Explicitly select a CJK-capable font. Without this, Matplotlib often falls
 # back to DejaVu Sans and renders Chinese titles/axis labels as squares.
-from pathlib import Path
-from matplotlib import font_manager
-
-# sampling_lab.py 位于“抽样分布_区间估计”子文件夹，
-# 因此需要向上返回一层，才能找到仓库根目录的 fonts 文件夹。
-font_path = (
-    Path(__file__).resolve().parent.parent
-    / "fonts"
-    / "NotoSansSC-Regular.ttf"
-)
-
-if font_path.exists():
-    # 将项目中的中文字体注册给 Matplotlib
-    font_manager.fontManager.addfont(str(font_path))
-
-    # 读取字体的内部名称
-    cjk_font = font_manager.FontProperties(
-        fname=str(font_path)
-    ).get_name()
-
-    mpl.rcParams["font.family"] = cjk_font
-    mpl.rcParams["font.sans-serif"] = [cjk_font]
-else:
-    # 找不到字体时的备用设置
-    mpl.rcParams["font.family"] = "sans-serif"
-    mpl.rcParams["font.sans-serif"] = [
-        "Noto Sans CJK SC",
-        "Noto Sans SC",
-        "DejaVu Sans",
-    ]
-
+mpl.rcParams["font.family"] = "sans-serif"
+mpl.rcParams["font.sans-serif"] = [
+    "Microsoft YaHei",
+    "Noto Sans CJK SC",
+    "Noto Sans SC",
+    "SimHei",
+    "DejaVu Sans",
+]
 mpl.rcParams["axes.unicode_minus"] = False
 
 
@@ -126,6 +103,18 @@ def sample_means(
     return first_sample, means
 
 
+@st.cache_data(show_spinner=False, max_entries=4)
+def cached_population_preview(distribution: str, mu: float, sigma: float, seed: int) -> np.ndarray:
+    return draw_values(np.random.default_rng(seed), distribution, 5000, mu, sigma)
+
+
+@st.cache_data(show_spinner=False, max_entries=4)
+def cached_sample_means(
+    distribution: str, mu: float, sigma: float, n: int, repetitions: int, seed: int
+) -> tuple[np.ndarray, np.ndarray]:
+    return sample_means(np.random.default_rng(seed), distribution, mu, sigma, n, repetitions)
+
+
 def estimator_property_samples(
     rng: np.random.Generator,
     distribution: str,
@@ -185,6 +174,36 @@ def ci_simulation(
     high = means + crit * se
     covered = (low <= mu) & (mu <= high)
     return means, low, high, float(covered.mean())
+
+
+@st.cache_data(show_spinner=False, max_entries=4)
+def cached_ci_simulation(
+    distribution: str, mu: float, sigma: float, n: int, repetitions: int,
+    confidence: int, seed: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, float]:
+    return ci_simulation(
+        np.random.default_rng(seed), distribution, mu, sigma, n, repetitions, confidence
+    )
+
+
+@st.cache_data(show_spinner=False, max_entries=4)
+def cached_estimator_samples(
+    distribution: str, mu: float, sigma: float, n: int, repetitions: int, seed: int
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    return estimator_property_samples(
+        np.random.default_rng(seed), distribution, mu, sigma, n, repetitions
+    )
+
+
+@st.cache_data(show_spinner=False, max_entries=4)
+def cached_consistency_errors(
+    distribution: str, mu: float, sigma: float, repetitions: int, seed: int
+) -> tuple[np.ndarray, ...]:
+    rng = np.random.default_rng(seed)
+    return tuple(
+        draw_values(rng, distribution, (repetitions, n_level), mu, sigma).mean(axis=1) - mu
+        for n_level in (2, 8, 32, 128)
+    )
 
 
 def explain_distribution(distribution: str, n: int) -> str:
@@ -247,19 +266,19 @@ with st.sidebar:
     seed = st.number_input("随机种子（改变它可重新抽样）", min_value=0, max_value=999999, value=2026, step=1)
     st.caption("n 决定每个样本的信息量；B 决定我们把抽样分布看得多清楚。")
 
-rng = np.random.default_rng(int(seed))
-population_preview = draw_values(rng, distribution, 5000, mu, sigma)
-first_sample, means = sample_means(rng, distribution, mu, sigma, n, repetitions)
+module = st.radio(
+    "实验模块",
+    ["① 抽样分布实验", "② 置信区间覆盖", "③ 数据库视角", "④ 课堂任务", "⑤ 估计量三性质"],
+    horizontal=True,
+    label_visibility="collapsed",
+)
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "① 抽样分布实验",
-    "② 置信区间覆盖",
-    "③ 数据库视角",
-    "④ 课堂任务",
-    "⑤ 估计量三性质",
-])
-
-with tab1:
+if module == "① 抽样分布实验":
+    effective_repetitions = min(repetitions, max(100, 1_000_000 // n))
+    population_preview = cached_population_preview(distribution, mu, sigma, int(seed))
+    first_sample, means = cached_sample_means(
+        distribution, mu, sigma, n, effective_repetitions, int(seed)
+    )
     st.markdown('<div class="hint">先看三个层次：总体中的个体值 → 一次抽到的样本 → 所有重复样本的统计量。</div>', unsafe_allow_html=True)
     fig, axes = plt.subplots(1, 3, figsize=(15, 4.25), constrained_layout=True)
     # Keep a common fixed reference scale so changing σ visibly changes the
@@ -277,12 +296,14 @@ with tab1:
         vline_label=r"$\bar{x}$",
         xlim=x_limits,
     )
-    make_hist(axes[2], means, f"样本均值的抽样分布（B={repetitions}）", PALETTE["gold"], vline=mu, vline_label="μ", xlim=x_limits)
+    make_hist(axes[2], means, f"样本均值的抽样分布（B={effective_repetitions}）", PALETTE["gold"], vline=mu, vline_label="μ", xlim=x_limits)
     axes[0].set_xlabel("个体观测值")
     axes[1].set_xlabel("样本中的观测值")
     axes[2].set_xlabel("样本均值")
     st.pyplot(fig, width="stretch")
     plt.close(fig)
+    if effective_repetitions < repetitions:
+        st.info(f"为控制计算量，本次实际模拟 B={effective_repetitions} 次（设置值为 {repetitions}）。")
     st.caption("三幅图共用固定横轴（以 σ=10 为参考），因此改变总体标准差时，分布宽度会直接显示出来；极端值可能落在显示范围之外。")
 
     theoretical_se = sigma / math.sqrt(n)
@@ -298,11 +319,12 @@ with tab1:
         f"样本均值的方差变为 `σ²/n={sigma**2/n:.3f}`，标准误为 `σ/√n={theoretical_se:.3f}`。"
     )
 
-with tab2:
+elif module == "② 置信区间覆盖":
     st.markdown('<div class="hint">绿色区间覆盖真实 μ，红色区间没有覆盖。覆盖率是长期性质，不保证每 100 个区间恰好有 95 个覆盖。</div>', unsafe_allow_html=True)
     ci_reps = min(repetitions, 220)
-    ci_rng = np.random.default_rng(int(seed) + 991)
-    ci_means, lows, highs, coverage = ci_simulation(ci_rng, distribution, mu, sigma, n, ci_reps, confidence)
+    ci_means, lows, highs, coverage = cached_ci_simulation(
+        distribution, mu, sigma, n, ci_reps, confidence, int(seed) + 991
+    )
     fig, (ax, ax_ref) = plt.subplots(
         1,
         2,
@@ -361,7 +383,7 @@ with tab2:
         "本次已经得到的某一个区间，要么包含 μ，要么不包含 μ。"
     )
 
-with tab3:
+elif module == "③ 数据库视角":
     st.markdown('<div class="hint">数据库有多少行，不等于有多少个独立观测。先选择数据结构，再比较名义样本量和有效信息量。</div>', unsafe_allow_html=True)
     design = st.radio("数据库中的一行代表什么？", ["独立个体", "重复测量：每人多次", "聚类数据：每组多人"], horizontal=True)
     units = st.slider("独立单位数", 10, 500, 50, 10)
@@ -410,7 +432,7 @@ with tab3:
     )
     st.caption("这里使用的是教学用设计效应近似：DEFF = 1 + (m−1)ρ。正式分析应根据研究设计使用重复测量、多层模型或聚类稳健标准误。")
 
-with tab4:
+elif module == "④ 课堂任务":
     st.markdown("### 课堂挑战：先预测，再拖动参数验证")
     tasks = [
         "固定 σ，分别把 n 调为 4、16、64。标准误大约如何变化？",
@@ -428,15 +450,14 @@ with tab4:
     st.write("2. 标准差描述个体差异；标准误描述统计量在重复抽样中的差异。")
     st.write("3. 置信区间很窄，只能说明随机不确定性较小，不能自动证明样本无偏。")
 
-with tab5:
+elif module == "⑤ 估计量三性质":
     st.markdown(
         '<div class="hint">把同一个抽样过程重复很多次：看估计量的中心（无偏性）、宽度（有效性）和随 n 增大是否集中（一致性）。</div>',
         unsafe_allow_html=True,
     )
-    property_reps = min(repetitions, 2000)
-    property_rng = np.random.default_rng(int(seed) + 2027)
-    mean_est, first_est, biased_est = estimator_property_samples(
-        property_rng, distribution, mu, sigma, n, property_reps
+    property_reps = min(repetitions, 2000, max(100, 1_000_000 // n))
+    mean_est, first_est, biased_est = cached_estimator_samples(
+        distribution, mu, sigma, n, property_reps, int(seed) + 2027
     )
     fig, axes = plt.subplots(1, 3, figsize=(15, 4.7), constrained_layout=True)
 
@@ -464,11 +485,9 @@ with tab5:
     # Panel 3: consistency is illustrated by shrinking errors as n grows.
     consistency_ns = [2, 8, 32, 128]
     consistency_reps = min(repetitions, 1200)
-    consistency_rng = np.random.default_rng(int(seed) + 9090)
-    errors = []
-    for n_level in consistency_ns:
-        vals = draw_values(consistency_rng, distribution, (consistency_reps, n_level), mu, sigma)
-        errors.append(vals.mean(axis=1) - mu)
+    errors = cached_consistency_errors(
+        distribution, mu, sigma, consistency_reps, int(seed) + 9090
+    )
     all_errors = np.concatenate(errors)
     error_limit = max(float(sigma), float(np.quantile(np.abs(all_errors), 0.995) * 1.1), 1.0)
     box = axes[2].boxplot(
